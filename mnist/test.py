@@ -67,31 +67,45 @@ class ClassifyNet(nn.Module):
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
         x = x.view(-1, 320)
+        self.features = x
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
         return F.log_softmax(x)
 
+    def get_features(self):
+        return self.features
+
 class TrustNet(nn.Module):
-    def __init__(self):
+    def __init__(self, classifier):
         super(TrustNet, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=5)
         self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(4*4*64, 1024)
-        self.fc2 = nn.Linear(1024, 2)
+        self.fc1 = nn.Linear(4*4*64+320, 1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc3 = nn.Linear(512, 2)
+        self.classifier = classifier
 
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 4*4*64)
-        x = F.relu(self.fc1(x))
+        y = F.relu(F.max_pool2d(self.conv1(x), 2))
+        y = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(y)), 2))
+        y = y.view(-1, 4*4*64)
+
+        self.classifier(x)
+        y2 = self.classifier.get_features()
+
+        x = F.relu(self.fc1(torch.cat((y, y2), 1)))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
+        x = self.fc3(x)
         return F.softmax(x)
 
+    def set_classifier(self, classifier):
+        self.classifier = classifier
+
 classify_model = ClassifyNet()
-confidence_model = TrustNet()
+confidence_model = TrustNet(classify_model)
 if args.cuda:
     classify_model.cuda()
     trust_model.cuda()
@@ -130,6 +144,11 @@ def train_classification(epoch):
 def train_confidence(epoch):
     classify_model.eval()
     confidence_model.train()
+
+    confidence_model.set_classifier(classify_model)
+    for param in confidence_model.classifier.parameters():
+        param.requires_grad = False
+
 
     negative_cases = []
     negative_targets = []
@@ -275,9 +294,8 @@ def evaluate():
         for idx, row in enumerate(confidence.split(1)):
             # if (corrected[idx][0]==0):
                 # print(row, corrected[idx])
-
             cor = row.data.numpy()
-            if (cor[0]>0.7):
+            if (cor[0]>0.3):
                 accepted_total_num += 1
 
                 if (corrected[idx][0]>0):
@@ -294,6 +312,7 @@ def evaluate():
 
 for epoch in range(1, args.epochs + 1):
     train_classification(epoch)
+    evaluate()
 
 for epoch in range(1, 200):
     train_confidence(epoch)

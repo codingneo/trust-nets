@@ -75,16 +75,16 @@ class ClassifyNet(nn.Module):
 class TrustNet(nn.Module):
     def __init__(self):
         super(TrustNet, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=5)
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
         self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(4*4*64, 1024)
-        self.fc2 = nn.Linear(1024, 2)
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 2)
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 4*4*64)
+        x = x.view(-1, 320)
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
@@ -132,7 +132,6 @@ def train_confidence(epoch):
     confidence_model.train()
 
     negative_cases = []
-    negative_targets = []
     for batch_idx, (data, target) in enumerate(train_loader):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
@@ -148,19 +147,18 @@ def train_confidence(epoch):
             # print(cor[0][0])
             if (cor[0][0]==0):
                 negative_cases.append(np.expand_dims(data[idx,0,:].data.numpy(), axis=0))
-                negative_targets.append(target[idx].data.numpy()[0])
 
-    negative_targets = torch.from_numpy(np.array(negative_targets))
     negative_data = torch.from_numpy(np.stack(negative_cases, axis=0))
 
     for batch_idx, (data, target) in enumerate(train_loader):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
-        # neg_target = torch.zeros(data.shape[0])
-        selected = np.random.choice(negative_data.shape[0], data.shape[0])
+        neg_target = torch.zeros(2*data.shape[0])
+        selected = np.random.choice(negative_data.shape[0], 2*data.shape[0])
         data = torch.cat((data, negative_data[selected, : ,:, :]), 0)
-        # target = torch.cat((target, neg_target.type('torch.LongTensor')), 0)
-        target = torch.cat((target, negative_targets[selected.tolist()]), 0)
+
+        
+        target = torch.cat((target, neg_target.type('torch.LongTensor')), 0)
 
         data, target = Variable(data), Variable(target)
         output = classify_model(data)
@@ -257,27 +255,27 @@ def evaluate():
     correct_num = 0
     accepted_total_num = 0
     accepted_correct_num = 0
-    # for data, target in test_loader:
-    for data, target in train_loader:
+    for data, target in test_loader:
+    # for data, target in train_loader:
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
         output = classify_model(data)
-        confidence = confidence_model(data)
-        confidence = confidence[:,1]
 
         pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
+        prob = torch.exp(output.data.max(1, keepdim=True)[0]) # get the index of the max log-probability
         corrected = pred.eq(target.data.view_as(pred))
 
         total_num += corrected.shape[0]
         correct_num += corrected.cpu().sum()
 
-        for idx, row in enumerate(confidence.split(1)):
+        for idx, row in enumerate(prob.split(1)):
             # if (corrected[idx][0]==0):
                 # print(row, corrected[idx])
 
-            cor = row.data.numpy()
-            if (cor[0]>0.7):
+            cor = row.numpy()
+            print(cor)
+            if (cor[0][0]>0.99):
                 accepted_total_num += 1
 
                 if (corrected[idx][0]>0):
@@ -295,7 +293,4 @@ def evaluate():
 for epoch in range(1, args.epochs + 1):
     train_classification(epoch)
 
-for epoch in range(1, 200):
-    train_confidence(epoch)
-    # test()
-    evaluate()
+evaluate()
